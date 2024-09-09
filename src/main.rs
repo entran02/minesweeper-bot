@@ -1,8 +1,15 @@
 use fantoccini::{ClientBuilder, Locator};
+use fantoccini::actions::{Actions, MouseActions, PointerAction, InputSource, MOUSE_BUTTON_RIGHT};
+use tokio::time::Duration;
 use tokio;
+mod info;
+mod posn;
+mod cell;
+mod board;
 
 #[tokio::main]
 async fn main() -> Result<(), fantoccini::error::CmdError> {
+
     // Connect to the WebDriver.
     let client = ClientBuilder::native().connect("http://localhost:9515").await.expect("failed to connect to webdriver.");
 

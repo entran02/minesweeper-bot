@@ -3,24 +3,24 @@ use fantoccini::{Client, Locator};
 use fantoccini::actions::{MouseActions, PointerAction, InputSource, MOUSE_BUTTON_RIGHT};
 use crate::posn::Posn;
 use crate::info;
+use std::borrow::BorrowMut;
 use std::collections::HashSet;
-use std::iter;
 use tokio::time::Duration;
 use std::hash::{Hash, Hasher};
 use serde_json::Value;
+use crate::cell_wrapper::CellWrapper;
 
 #[derive(Clone, Debug)]
 pub struct Cell{
-    bomb: bool,
-    blank: bool,
-    number: bool,
-    attribute: String,
-    cell_integer: i32,
+    pub bomb: bool,
+    pub blank: bool,
+    pub number: bool,
+    pub attribute: String,
+    pub cell_integer: i32,
     pub posn: Posn,
-    neighbors: HashSet<Cell>,
-    client: Client,
-    locator: String,
-    //pub ATTRIBUTES: HashMap<&'static str, char>
+    pub neighbors:  HashSet<CellWrapper>,
+    pub client: Client,
+    pub locator: String,
 }
 
 impl PartialEq for Cell {
@@ -32,7 +32,6 @@ impl PartialEq for Cell {
             && self.posn == other.posn
             && self.attribute == other.attribute
             && self.locator == other.locator
-            // We are intentionally excluding neighbors from equality checks
     }
 }
 
@@ -51,11 +50,15 @@ impl Hash for Cell {
 }
 
 impl Cell {
-    pub fn new(row: i32, col: i32, client: Client) -> Self {
+    pub fn new(row: i32, col: i32, client: Client) -> CellWrapper {
         let posn = Posn::new(row, col);
-        let locator = format!(r#"#\3{}_{}"#, row + 1, col + 1);
-        //let attributes = info::get_reps();
-        Cell {
+        let locator = if row + 1 < 10 {
+            format!(r#"#\3{}_{}"#, row + 1, col + 1)
+        } else {
+            format!(r#"#\31 {}_{}"#, row + 1 - 10, col + 1)
+        };
+        
+        let cell = Cell {
             bomb: false,
             blank: true,
             number: false,
@@ -65,11 +68,12 @@ impl Cell {
             neighbors: HashSet::new(),
             client,
             locator,
-            //ATTRIBUTES: attributes
-        }
+        };
+
+        CellWrapper::new(cell)
     }
 
-    pub fn assign_neighbors(&mut self, neighbors: HashSet<Cell>) {
+    pub fn assign_neighbors(&mut self, neighbors: HashSet<CellWrapper>) {
         if !self.neighbors.is_empty() {
             panic!("Neighbors already assigned");
         }
@@ -90,9 +94,9 @@ impl Cell {
             let element = self.client.find(Locator::Css(&self.locator)).await?;
             let move_action = PointerAction::MoveToElement {
                 element: element.clone(),
-                duration: Some(Duration::from_millis(500)),  // Optional: Move over 500ms
-                x: 0,  // Optional: X offset from the center of the element
-                y: 0,  // Optional: Y offset from the center of the element
+                duration: Some(Duration::from_millis(100)),
+                x: 0,
+                y: 0,
             };
             let mouse_actions = MouseActions::new("right".to_string())
                 .then(move_action)
@@ -140,12 +144,12 @@ impl Cell {
         Ok(())
     }
 
-    pub fn bomb_neighbors(&self) -> HashSet<&Cell> {
-        self.neighbors.iter().filter(|neighbor| neighbor.bomb).collect()
+    pub fn bomb_neighbors(&self) -> HashSet<CellWrapper> {
+        self.neighbors.iter().filter(|neighbor| neighbor.borrow().bomb).cloned().collect()
     }
 
-    pub fn blank_neighbors(&self) -> HashSet<&Cell> {
-        self.neighbors.iter().filter(|neighbor| neighbor.blank).collect()
+    pub fn blank_neighbors(&self) -> HashSet<CellWrapper> {
+        self.neighbors.iter().filter(|neighbor| neighbor.borrow().blank).cloned().collect()
     }
 
     pub fn get_number(&self) -> i32 {
@@ -156,8 +160,15 @@ impl Cell {
         self.cell_integer
     }
 
-    pub fn non_zero_number_neighbors(&self) -> HashSet<&Cell> {
-        let neighbors = self.neighbors.iter().filter(|neighbor| neighbor.number && neighbor.get_number() > 0).collect();
+    pub fn non_zero_number_neighbors(&self) -> HashSet<CellWrapper> {
+        let neighbors = self.neighbors
+            .iter()
+            .filter(|neighbor| {
+                let cell = neighbor.borrow();
+                cell.number && cell.cell_integer > 0
+            })
+            .cloned()
+            .collect();
         //println!("Non zero number neighbors: {:?}", neighbors);
         //println!("neighbors: {:?}", neighbors);
         //println!("self.neighbors: {:?}", self.neighbors);
@@ -168,27 +179,29 @@ impl Cell {
         self.cell_integer - self.bomb_neighbors().len() as i32
     }
 
-    pub fn get_more_to_flag(&self) -> HashSet<&Cell> {
-        let mut pattern_flag: HashSet<&Cell> = HashSet::new();
+    pub fn get_more_to_flag(&self) -> HashSet<CellWrapper> {
+        let mut pattern_flag: HashSet<CellWrapper> = HashSet::new();
 
         for neighbor in self.non_zero_number_neighbors() {
-            let diff: HashSet<&Cell> = neighbor.blank_neighbors().difference(&self.blank_neighbors()).cloned().collect();
+            let diff: HashSet<CellWrapper> = neighbor.blank_neighbors().difference(&self.blank_neighbors()).cloned().collect();
             if diff.len() as i32 == neighbor.bombs_remaining() - self.bombs_remaining() {
                 pattern_flag.extend(diff);
             }
         }
-        println!("Pattern flag: {:?}", pattern_flag);
+        //println!("Pattern flag: {:?}", pattern_flag);
         pattern_flag
     }
 
-    pub fn get_more_to_reveal(&self) -> HashSet<&Cell> {
-        let mut pattern_reveal: HashSet<&Cell> = HashSet::new();
+    pub fn get_more_to_reveal(&self) -> HashSet<CellWrapper> {
+        let mut pattern_reveal: HashSet<CellWrapper> = HashSet::new();
 
-        let this_blank: HashSet<_> = self.blank_neighbors();
+        let this_blank: HashSet<CellWrapper> = self.blank_neighbors();
+
         for neighbor in self.non_zero_number_neighbors() {
-            let other_blank: HashSet<_> = neighbor.blank_neighbors();
+            let other_blank: HashSet<CellWrapper> = neighbor.blank_neighbors();
+
             if this_blank.is_subset(&other_blank) && self.bombs_remaining() == neighbor.bombs_remaining() {
-                let diff: HashSet<_> = other_blank.difference(&this_blank).cloned().collect();
+                let diff: HashSet<CellWrapper> = other_blank.difference(&this_blank).cloned().collect();
                 if !diff.is_empty() {
                     pattern_reveal.extend(diff);
                 }
@@ -199,11 +212,11 @@ impl Cell {
 
     pub fn should_add_to_workset(&self) -> bool {
         let result = self.number && self.cell_integer > 0 && !self.blank_neighbors().is_empty();
-        println!("Should add to workset for cell {:?}: {}", self, result);
+        //println!("Should add to workset for cell {:?}: {}", self, result);
         result
     }
 
-    pub fn get_neighbors_to_flag(&self) -> HashSet<&Cell> {
+    pub fn get_neighbors_to_flag(&self) -> HashSet<CellWrapper> {
         let blank_neighbors = self.blank_neighbors();
         if blank_neighbors.len() == self.bombs_remaining() as usize{
             blank_neighbors
@@ -212,24 +225,15 @@ impl Cell {
         }
     }
 
-    pub fn field_string(&self) -> String {
-        if self.blank {
-            "▢".to_string()
-        } else if self.bomb {
-            "⚐".to_string()
-        } else {
-            self.cell_integer.to_string()
-        }
-    }
-
     pub async fn update_attribute(&mut self) -> Result<String, CmdError> {
         let element = self.client.find(Locator::Css(&self.locator)).await?;
         
-        // If the attribute exists, update and return it
         if let Some(attribute) = element.attr("class").await? {
-            self.attribute = attribute.clone();
+            // can be mut cell?? or not?? idk lmao
+            let cell = self.borrow_mut();
+            cell.attribute = attribute.clone();
             if attribute.contains("bombdeath") {
-                self.bomb = true; // This will set bomb to true when a bomb is clicked
+                cell.bomb = true; // hard-reset
             }
             Ok(attribute)
         } else {
@@ -242,31 +246,29 @@ impl Cell {
             panic!("Cannot update a non-blank cell");
         }
     
-        // Retrieve the current attribute of the cell (class or other identifier)
         let current_attribute = self.attribute.clone();
         let new_attribute = self.update_attribute().await?;
         let attributes = info::get_reps();
     
-        // If the attribute has changed, check whether it's a bomb or a number
+        // if square has changed, check if it's a bomb or a number
         if current_attribute != new_attribute {
             self.attribute = new_attribute.clone();
     
-            // Check if the new attribute indicates the cell is a bomb
             if self.bomb {
-                // A bomb was clicked, trigger boom
                 println!("BOOM!");
                 return Ok((false, true));
             } else if attributes.contains_key(&new_attribute.as_str()) {
-                // It's not a bomb but a number, process the number
+                // if a number, process the number
+                println!("Number: {:?}", new_attribute);
                 self.to_number();
-                return Ok((true, false)); // Updated with no boom
+                return Ok((true, false));
             }
         }
     
-        Ok((false, false)) // No update or boom
+        Ok((false, false))
     }
     
-    pub fn get_neighbors_to_reveal(&self) -> (bool, HashSet<&Cell>) {
+    pub fn get_neighbors_to_reveal(&self) -> (bool, HashSet<CellWrapper>) {
         if self.get_number() == self.bomb_neighbors().len() as i32 {
             (true, self.blank_neighbors())
         } else {

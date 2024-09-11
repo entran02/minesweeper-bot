@@ -1,11 +1,9 @@
-use crate::cell::Cell;
-use crate::info;
-use crate::posn::Posn;
-use fantoccini::{Client, ClientBuilder, Locator};
+use fantoccini::{Client, Locator};
 use fantoccini::error::CmdError;
 use std::collections::HashSet;
 use rand::seq::IteratorRandom;
-use tokio::time::{Instant, Duration};
+use tokio::time::Instant;
+use crate::cell_wrapper::CellWrapper;
 
 pub struct Board {
     pub log: bool,
@@ -13,11 +11,11 @@ pub struct Board {
     pub rows: usize,
     pub cols: usize,
     mines: usize,
-    blank: HashSet<Cell>,
-    bombs: HashSet<Cell>,
-    numbers: HashSet<Cell>,
-    workset: HashSet<Cell>,
-    matrix: Vec<Vec<Cell>>,
+    blank: HashSet<CellWrapper>,
+    bombs: HashSet<CellWrapper>,
+    numbers: HashSet<CellWrapper>,
+    workset: HashSet<CellWrapper>,
+    matrix: Vec<Vec<CellWrapper>>,
     client: Client,
     pub face_locator: String,
 }
@@ -35,14 +33,14 @@ impl Board {
         client.goto(link).await?;
         client.wait().for_element(Locator::Css(".square.blank")).await?;
 
-        let face_locator = "#face".to_string(); // Adjust based on HTML structure
+        let face_locator = "#face".to_string();
         client.find(Locator::Css(&face_locator)).await?;
 
-        let mut matrix: Vec<Vec<Cell>> = Vec::new();
-        let blank: HashSet<Cell> = HashSet::new();
-        let bombs: HashSet<Cell> = HashSet::new();
-        let numbers: HashSet<Cell> = HashSet::new();
-        let workset: HashSet<Cell> = HashSet::new();
+        let mut matrix: Vec<Vec<CellWrapper>> = Vec::new();
+        let blank: HashSet<CellWrapper> = HashSet::new();
+        let bombs: HashSet<CellWrapper> = HashSet::new();
+        let numbers: HashSet<CellWrapper> = HashSet::new();
+        let workset: HashSet<CellWrapper> = HashSet::new();
 
         let mut board = Board {
             log,
@@ -60,6 +58,7 @@ impl Board {
         };
         
         board.init_fields_and_cells().await?;
+        //println!("matrix: {:?}", board.matrix);
 
         if log {
             let elapsed = start_time.elapsed();
@@ -76,7 +75,8 @@ impl Board {
     pub async fn play(&mut self) -> Result<(), CmdError> {
         while !self.blank.is_empty() {
             let to_flag = self.get_cells_to_flag();
-            println!("Cells to flag: {:?}", to_flag);
+            //println!("Cells to flag: {:?}", to_flag);
+            //println!("self.numbers: {:?}", self.numbers);
             if !to_flag.is_empty() {
                 self.log_action("flag".to_string());
                 self.flag_all(to_flag).await;
@@ -103,20 +103,20 @@ impl Board {
         self.workset.clear();
         for row in &mut self.matrix {
             for cell in row {
-                cell.reset();
-                self.blank.insert((*cell).clone());
+                cell.0.borrow_mut().reset();
+                self.blank.insert(cell.clone());
             }
         }
     }
 
     pub async fn reveal_random(&mut self) -> Result<(), fantoccini::error::CmdError> {
-        // Filter blank cells that have no non-zero number neighbors
+        // filter blank cells with no non zero neighbors
         let no_numbers: HashSet<_> = self.blank.iter()
-            .filter(|&&ref cell| cell.non_zero_number_neighbors().is_empty())
+            .filter(|&&ref cell| cell.0.borrow().non_zero_number_neighbors().is_empty())
             .cloned()
             .collect();
 
-        // Initialize the lowest probability and random cell
+        // lowest probability of being a bomb
         let mut lowest_prob: f64;
         let mut random_cell = if no_numbers.is_empty() {
             lowest_prob = 1.0;
@@ -126,11 +126,11 @@ impl Board {
             no_numbers.iter().choose(&mut rand::thread_rng()).unwrap().clone()
         };
 
-        // Check all cells in the workset for a better probability
+        // check workset for probabilities
         for cell in &self.workset {
-            let blank_neighbors = cell.blank_neighbors();
+            let blank_neighbors = cell.0.borrow().blank_neighbors();
             if !blank_neighbors.is_empty() {
-                let prob = cell.bombs_remaining() as f64 / blank_neighbors.len() as f64;
+                let prob = cell.0.borrow().bombs_remaining() as f64 / blank_neighbors.len() as f64;
                 if prob < lowest_prob {
                     lowest_prob = prob;
                     random_cell = blank_neighbors.iter().choose(&mut rand::thread_rng()).unwrap().clone().clone();
@@ -138,8 +138,7 @@ impl Board {
             }
         }
 
-        // Click on the chosen random cell and update from it
-        random_cell.click().await?;
+        random_cell.0.borrow().click().await?;
         self.update_from(vec![random_cell].into_iter().collect()).await?;
 
         Ok(())
@@ -149,7 +148,7 @@ impl Board {
         for row in 0..self.rows {
             let mut row_vec = vec![];
             for col in 0..self.cols {
-                let cell = Cell::new(row as i32, col as i32, self.client.clone());
+                let cell = CellWrapper::with_params(row as i32, col as i32, self.client.clone());
                 row_vec.push(cell.clone());
                 self.blank.insert(cell);
             }
@@ -159,11 +158,11 @@ impl Board {
         let matrix_snapshot = self.matrix.clone();
         for row in &mut self.matrix {
             for cell in row {
-                let neighbors: HashSet<Cell> = cell.neighbors_posns(self.rows as i32, self.cols as i32)
+                let neighbors: HashSet<CellWrapper> = cell.borrow().neighbors_posns(self.rows as i32, self.cols as i32)
                     .into_iter()
                     .map(|pos| matrix_snapshot[pos.row as usize][pos.col as usize].clone())
                     .collect();
-                cell.assign_neighbors(neighbors);
+                cell.borrow_mut().assign_neighbors(neighbors);
             }
         }
 
@@ -176,8 +175,8 @@ impl Board {
         }
     }
 
-    async fn flag_all(&mut self, to_flag: HashSet<Cell>) {
-        for mut cell in to_flag {
+    async fn flag_all(&mut self, to_flag: HashSet<CellWrapper>) {
+        for cell in to_flag {
             println!("Preparing to flag the cell.");
             cell.flag(self.mark_flags).await.unwrap();
             println!("Cell flagged successfully.");
@@ -186,37 +185,33 @@ impl Board {
         }
     }
 
-    pub async fn update_from(&mut self, mut workset: HashSet<Cell>) -> Result<(), CmdError> {
+    pub async fn update_from(&mut self, mut workset: HashSet<CellWrapper>) -> Result<(), CmdError> {
         let start_time = Instant::now();
         let mut counter = 0;
-        let mut visited: HashSet<Cell> = HashSet::new();
+        let mut visited: HashSet<CellWrapper> = HashSet::new();
 
+        // dfs approach
         while !workset.is_empty() {
-            // Pop an element from the workset
-            let mut popped = workset.iter().next().cloned().unwrap();
+            // pop first element
+            let popped = workset.iter().next().cloned().unwrap();
             workset.remove(&popped);
 
-            // If the popped cell is not already visited
+            // check if the cell has been visited
             if !visited.contains(&popped) {
                 visited.insert(popped.clone());
 
-                // Call update on the cell
-                let (updated, boom) = popped.update().await?;
+                let (updated, boom) = popped.0.borrow_mut().update().await?;
 
-                // If there's a boom, reset the game
                 if boom {
                     self.reset_game().await;
                     return Ok(());
                 } else if updated {
-                    // Add blank neighbors of the popped cell to the workset
-                    workset.extend(popped.blank_neighbors().into_iter().cloned());
+                    workset.extend(popped.0.borrow().blank_neighbors().iter().cloned());
 
-                    // Remove from blank and add to numbers set
                     self.blank.remove(&popped);
                     self.numbers.insert(popped.clone());
 
-                    // If the cell should be added to the workset, do so
-                    if popped.should_add_to_workset() {
+                    if popped.0.borrow().should_add_to_workset() {
                         self.workset.insert(popped);
                     }
 
@@ -225,17 +220,16 @@ impl Board {
             }
         }
 
-        // Log the time taken to update the cells
         let elapsed = start_time.elapsed();
         self.log_action(format!("\t{:.3} seconds to update {} cells", elapsed.as_secs_f32(), counter));
 
         Ok(())
     }
 
-    async fn reveal_all(&mut self, to_reveal: HashSet<Cell>) {
+    async fn reveal_all(&mut self, to_reveal: HashSet<CellWrapper>) {
         if to_reveal.len() == self.blank.len() {
             for cell in &to_reveal {
-                cell.click().await.unwrap();
+                cell.0.borrow().click().await.unwrap();
                 self.blank.remove(cell);
                 self.numbers.insert(cell.clone());
             }
@@ -243,38 +237,38 @@ impl Board {
         } else {
             let mut to_update = HashSet::new();
             for cell in &to_reveal {
-                cell.click().await.unwrap();
+                cell.0.borrow().click().await.unwrap();
                 to_update.insert(cell.clone());
             }
             self.update_from(to_update).await;
         }
     }
 
-    fn get_cells_to_flag(&self) -> HashSet<Cell> { 
+    fn get_cells_to_flag(&self) -> HashSet<CellWrapper> { 
         let mut to_flag = HashSet::new();
         for cell in &self.workset {
-            let neighbors_to_flag = cell.get_neighbors_to_flag();
-            to_flag.extend(neighbors_to_flag.into_iter().cloned());
-            println!("Neighbors to flag: {:?}", to_flag);
+            let neighbors_to_flag = cell.0.borrow().get_neighbors_to_flag();
+            to_flag.extend(neighbors_to_flag.iter().cloned());
+            //println!("Neighbors to flag: {:?}", to_flag);
         }
         to_flag
     }
-
-    fn get_cells_to_reveal(&mut self) -> HashSet<Cell> {
+    
+    fn get_cells_to_reveal(&mut self) -> HashSet<CellWrapper> {
         let mut to_reveal = HashSet::new();
         let mut to_discard = HashSet::new();
         for cell in &self.workset {
-            let (exhausted, neighbors) = cell.get_neighbors_to_reveal();
+            let (exhausted, neighbors) = cell.0.borrow().get_neighbors_to_reveal();
             if exhausted {
                 to_discard.insert(cell.clone());
             }
-            to_reveal.extend(neighbors.into_iter().cloned());
+            to_reveal.extend(neighbors.iter().cloned());
         }
         self.workset = self.workset.difference(&to_discard).cloned().collect();
         to_reveal
     }
 
-    pub fn to_string(&self) -> String {
+    /*pub fn to_string(&self) -> String {
         let mut out = format!(
             "Board(rows = {},\n\tcols = {}\n\tmines = {}\n\tblank.size = {}\n\tbombs.size = {}\n\tnumbers.size = {}\n\tworkset.size = {}\n",
             self.rows, self.cols, self.mines, self.blank.len(), self.bombs.len(), self.numbers.len(), self.workset.len()
@@ -283,10 +277,10 @@ impl Board {
         for row in &self.matrix {
             out.push_str("\t\t");
             for cell in row {
-                out.push_str(&format!("{} ", cell.field_string()));
+                out.push_str(&format!("{} ", cell.0.borrow().field_string()));
             }
             out.push('\n');
         }
         out
-    }
+    }*/
 }

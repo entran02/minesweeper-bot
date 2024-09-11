@@ -7,6 +7,7 @@ mod posn;
 mod cell;
 mod board;
 use board::Board;
+mod cell_wrapper;
 
 #[tokio::main]
 async fn main() -> Result<(), fantoccini::error::CmdError> {

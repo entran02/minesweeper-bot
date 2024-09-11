@@ -4,17 +4,19 @@ use fantoccini::actions::{MouseActions, PointerAction, InputSource, MOUSE_BUTTON
 use crate::posn::Posn;
 use crate::info;
 use std::collections::HashSet;
+use std::iter;
 use tokio::time::Duration;
 use std::hash::{Hash, Hasher};
 use serde_json::Value;
 
+#[derive(Clone, Debug)]
 pub struct Cell{
     bomb: bool,
     blank: bool,
     number: bool,
     attribute: String,
     cell_integer: i32,
-    posn: Posn,
+    pub posn: Posn,
     neighbors: HashSet<Cell>,
     client: Client,
     locator: String,
@@ -72,12 +74,15 @@ impl Cell {
             panic!("Neighbors already assigned");
         }
         self.neighbors = neighbors;
+        //println!("Assigned neighbors for cell {:?}: {:?}", self.posn, self.neighbors);
+
     }
 
     pub async fn flag(&mut self, mark_flags: bool) -> Result<(), fantoccini::error::CmdError> {
         if !self.blank {
             panic!("Cannot flag a non-blank cell");
         }
+        println!("Flagging: {:?}", self.locator);
         self.bomb = true;
         self.blank = false;
 
@@ -104,12 +109,16 @@ impl Cell {
 
     pub fn to_number(&mut self) {
         let reps = info::get_reps();
-        if let Some(&num) = reps.get(&self.attribute.as_str()) {
-            self.number = true;
-            self.blank = false;
-            self.cell_integer = num as i32;
+        if let Some(&num_char) = reps.get(&self.attribute.as_str()) {
+            if let Some(digit) = num_char.to_digit(10) {
+                self.number = true;
+                self.blank = false;
+                self.cell_integer = digit as i32;
+            } else {
+                println!("Non-number attribute: {}", self.attribute);
+            }
         } else {
-            panic!("Invalid attribute");
+            panic!("Invalid attribute: {}", self.attribute);
         }
     }
 
@@ -124,6 +133,8 @@ impl Cell {
         if !self.blank {
             panic!("Cannot click a non-blank cell");
         }
+
+        println!("Selector: {:?}", Locator::Css(&self.locator));
         let element = self.client.find(Locator::Css(&self.locator)).await?;
         element.click().await?;
         Ok(())
@@ -141,13 +152,17 @@ impl Cell {
         if !self.number {
             panic!("Cell is not a number");
         }
+        println!("Get number Cell integer: {}", self.cell_integer);
         self.cell_integer
     }
 
     pub fn non_zero_number_neighbors(&self) -> HashSet<&Cell> {
-        self.neighbors.iter().filter(|neighbor| neighbor.number && neighbor.get_number() > 0).collect()
+        let neighbors = self.neighbors.iter().filter(|neighbor| neighbor.number && neighbor.get_number() > 0).collect();
+        //println!("Non zero number neighbors: {:?}", neighbors);
+        //println!("neighbors: {:?}", neighbors);
+        //println!("self.neighbors: {:?}", self.neighbors);
+        neighbors
     }
-
 
     pub fn bombs_remaining(&self) -> i32 {
         self.cell_integer - self.bomb_neighbors().len() as i32
@@ -162,6 +177,7 @@ impl Cell {
                 pattern_flag.extend(diff);
             }
         }
+        println!("Pattern flag: {:?}", pattern_flag);
         pattern_flag
     }
 
@@ -182,7 +198,9 @@ impl Cell {
     }
 
     pub fn should_add_to_workset(&self) -> bool {
-        self.number && self.cell_integer > 0 && !self.blank_neighbors().is_empty()
+        let result = self.number && self.cell_integer > 0 && !self.blank_neighbors().is_empty();
+        println!("Should add to workset for cell {:?}: {}", self, result);
+        result
     }
 
     pub fn get_neighbors_to_flag(&self) -> HashSet<&Cell> {
@@ -194,40 +212,66 @@ impl Cell {
         }
     }
 
+    pub fn field_string(&self) -> String {
+        if self.blank {
+            "▢".to_string()
+        } else if self.bomb {
+            "⚐".to_string()
+        } else {
+            self.cell_integer.to_string()
+        }
+    }
+
     pub async fn update_attribute(&mut self) -> Result<String, CmdError> {
         let element = self.client.find(Locator::Css(&self.locator)).await?;
         
         // If the attribute exists, update and return it
         if let Some(attribute) = element.attr("class").await? {
             self.attribute = attribute.clone();
+            if attribute.contains("bombdeath") {
+                self.bomb = true; // This will set bomb to true when a bomb is clicked
+            }
             Ok(attribute)
         } else {
             Err(CmdError::NotW3C(Value::String("Attribute not found".to_string())))
         }
     }
 
-    pub async fn update(&mut self) -> Result<(bool, bool), fantoccini::error::CmdError> {
+    pub async fn update(&mut self) -> Result<(bool, bool), CmdError> {
         if !self.blank {
             panic!("Cannot update a non-blank cell");
         }
-
+    
+        // Retrieve the current attribute of the cell (class or other identifier)
         let current_attribute = self.attribute.clone();
         let new_attribute = self.update_attribute().await?;
         let attributes = info::get_reps();
-
+    
+        // If the attribute has changed, check whether it's a bomb or a number
         if current_attribute != new_attribute {
             self.attribute = new_attribute.clone();
-
-            if attributes.contains_key(&new_attribute.as_str()) {
-                Ok((false, true))
-            } else {
+    
+            // Check if the new attribute indicates the cell is a bomb
+            if self.bomb {
+                // A bomb was clicked, trigger boom
+                println!("BOOM!");
+                return Ok((false, true));
+            } else if attributes.contains_key(&new_attribute.as_str()) {
+                // It's not a bomb but a number, process the number
                 self.to_number();
-                Ok((true, false))
+                return Ok((true, false)); // Updated with no boom
             }
+        }
+    
+        Ok((false, false)) // No update or boom
+    }
+    
+    pub fn get_neighbors_to_reveal(&self) -> (bool, HashSet<&Cell>) {
+        if self.get_number() == self.bomb_neighbors().len() as i32 {
+            (true, self.blank_neighbors())
         } else {
-            Ok((false, false))
-        }   
-            
+            (false, self.get_more_to_reveal())
+        }
     }
 
     pub fn neighbors_posns(&self, rows: i32, cols: i32) -> Vec<Posn> {

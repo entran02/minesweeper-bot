@@ -39,10 +39,11 @@ impl Posn {
     
     // returns 8 blocks surrounding the position that are in range
     pub fn surrounding_in_range(&self, rows: i32, cols: i32) -> Vec<Posn> {
-        self.surrounding()
+        let test = self.surrounding()
             .into_iter()
             .filter(|posn| posn.in_range(rows, cols))
-            .collect()
+            .collect();
+        test
     }
 }
 

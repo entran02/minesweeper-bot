@@ -78,7 +78,6 @@ impl Cell {
             panic!("Neighbors already assigned");
         }
         self.neighbors = neighbors;
-        //println!("Assigned neighbors for cell {:?}: {:?}", self.posn, self.neighbors);
 
     }
 
@@ -86,7 +85,6 @@ impl Cell {
         if !self.blank {
             panic!("Cannot flag a non-blank cell");
         }
-        println!("Flagging: {:?}", self.locator);
         self.bomb = true;
         self.blank = false;
 
@@ -118,8 +116,6 @@ impl Cell {
                 self.number = true;
                 self.blank = false;
                 self.cell_integer = digit as i32;
-            } else {
-                println!("Non-number attribute: {}", self.attribute);
             }
         } else {
             panic!("Invalid attribute: {}", self.attribute);
@@ -134,11 +130,10 @@ impl Cell {
     }
 
     pub async fn click(&self) -> Result<(), fantoccini::error::CmdError> {
-        if !self.blank {
+        /*if !self.blank {
             panic!("Cannot click a non-blank cell");
-        }
+        }*/
 
-        println!("Selector: {:?}", Locator::Css(&self.locator));
         let element = self.client.find(Locator::Css(&self.locator)).await?;
         element.click().await?;
         Ok(())
@@ -156,7 +151,6 @@ impl Cell {
         if !self.number {
             panic!("Cell is not a number");
         }
-        println!("Get number Cell integer: {}", self.cell_integer);
         self.cell_integer
     }
 
@@ -169,9 +163,6 @@ impl Cell {
             })
             .cloned()
             .collect();
-        //println!("Non zero number neighbors: {:?}", neighbors);
-        //println!("neighbors: {:?}", neighbors);
-        //println!("self.neighbors: {:?}", self.neighbors);
         neighbors
     }
 
@@ -188,7 +179,6 @@ impl Cell {
                 pattern_flag.extend(diff);
             }
         }
-        //println!("Pattern flag: {:?}", pattern_flag);
         pattern_flag
     }
 
@@ -212,7 +202,6 @@ impl Cell {
 
     pub fn should_add_to_workset(&self) -> bool {
         let result = self.number && self.cell_integer > 0 && !self.blank_neighbors().is_empty();
-        //println!("Should add to workset for cell {:?}: {}", self, result);
         result
     }
 
@@ -243,7 +232,10 @@ impl Cell {
 
     pub async fn update(&mut self) -> Result<(bool, bool), CmdError> {
         if !self.blank {
-            panic!("Cannot update a non-blank cell");
+            self.bomb = true;
+            // currently resets and tries again if met with 50/50 scenario
+            // TODO: implement random blank square click in this case
+            //self.click().await?;
         }
     
         let current_attribute = self.attribute.clone();
@@ -259,7 +251,6 @@ impl Cell {
                 return Ok((false, true));
             } else if attributes.contains_key(&new_attribute.as_str()) {
                 // if a number, process the number
-                println!("Number: {:?}", new_attribute);
                 self.to_number();
                 return Ok((true, false));
             }

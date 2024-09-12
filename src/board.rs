@@ -17,7 +17,6 @@ pub struct Board {
     workset: HashSet<CellWrapper>,
     matrix: Vec<Vec<CellWrapper>>,
     client: Client,
-    pub face_locator: String,
 }
 
 impl Board {
@@ -28,19 +27,12 @@ impl Board {
         let cols = 30;
         let mines = 99;
         let link = "https://minesweeperonline.com/";
-        //let client = ClientBuilder::native().connect("http://localhost:9515").await.expect("failed to connect to webdriver.");
 
         client.goto(link).await?;
         client.wait().for_element(Locator::Css(".square.blank")).await?;
 
         let face_locator = "#face".to_string();
         client.find(Locator::Css(&face_locator)).await?;
-
-        let mut matrix: Vec<Vec<CellWrapper>> = Vec::new();
-        let blank: HashSet<CellWrapper> = HashSet::new();
-        let bombs: HashSet<CellWrapper> = HashSet::new();
-        let numbers: HashSet<CellWrapper> = HashSet::new();
-        let workset: HashSet<CellWrapper> = HashSet::new();
 
         let mut board = Board {
             log,
@@ -54,11 +46,9 @@ impl Board {
             workset: HashSet::new(),
             matrix: vec![],
             client: client.clone(),
-            face_locator,
         };
         
         board.init_fields_and_cells().await?;
-        //println!("matrix: {:?}", board.matrix);
 
         if log {
             let elapsed = start_time.elapsed();
@@ -74,9 +64,12 @@ impl Board {
 
     pub async fn play(&mut self) -> Result<(), CmdError> {
         while !self.blank.is_empty() {
+            if let Ok(_) = self.client.find(Locator::Css("div#face.facewin")).await {
+                println!("Game won!");
+                return Ok(());
+            }
+
             let to_flag = self.get_cells_to_flag();
-            //println!("Cells to flag: {:?}", to_flag);
-            //println!("self.numbers: {:?}", self.numbers);
             if !to_flag.is_empty() {
                 self.log_action("flag".to_string());
                 self.flag_all(to_flag).await;
@@ -177,9 +170,7 @@ impl Board {
 
     async fn flag_all(&mut self, to_flag: HashSet<CellWrapper>) {
         for cell in to_flag {
-            println!("Preparing to flag the cell.");
             cell.flag(self.mark_flags).await.unwrap();
-            println!("Cell flagged successfully.");
             self.blank.remove(&cell);
             self.bombs.insert(cell);
         }
@@ -249,7 +240,6 @@ impl Board {
         for cell in &self.workset {
             let neighbors_to_flag = cell.0.borrow().get_neighbors_to_flag();
             to_flag.extend(neighbors_to_flag.iter().cloned());
-            //println!("Neighbors to flag: {:?}", to_flag);
         }
         to_flag
     }
@@ -267,20 +257,4 @@ impl Board {
         self.workset = self.workset.difference(&to_discard).cloned().collect();
         to_reveal
     }
-
-    /*pub fn to_string(&self) -> String {
-        let mut out = format!(
-            "Board(rows = {},\n\tcols = {}\n\tmines = {}\n\tblank.size = {}\n\tbombs.size = {}\n\tnumbers.size = {}\n\tworkset.size = {}\n",
-            self.rows, self.cols, self.mines, self.blank.len(), self.bombs.len(), self.numbers.len(), self.workset.len()
-        );
-        out.push_str("\tMatrix as String:\n");
-        for row in &self.matrix {
-            out.push_str("\t\t");
-            for cell in row {
-                out.push_str(&format!("{} ", cell.0.borrow().field_string()));
-            }
-            out.push('\n');
-        }
-        out
-    }*/
 }

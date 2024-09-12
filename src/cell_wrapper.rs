@@ -8,7 +8,7 @@ use crate::posn::Posn;
 use fantoccini::error::CmdError;
 
 #[derive(Clone, Debug)]
-pub struct CellWrapper(pub Rc<RefCell<Cell>>);  // Newtype around Rc<RefCell<Cell>>
+pub struct CellWrapper(pub Rc<RefCell<Cell>>);
 
 impl PartialEq for CellWrapper {
     fn eq(&self, other: &Self) -> bool {

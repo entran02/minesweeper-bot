@@ -1,6 +1,6 @@
 # Minesweeper Bot
 
-This Rust project automates playing Google Minesweeper using the Fantoccini crate.
+This Rust project automates playing MinesweeperOnline using the Fantoccini crate.
 
 ## Setup
 
@@ -11,10 +11,10 @@ This Rust project automates playing Google Minesweeper using the Fantoccini crat
 
 ## Features
 
-- Automatically solves Google Minesweeper
+- Automatically solves MinesweeperOnline
 - Uses WebDriver for browser interaction
 
 ## TODO:
 
 - Currently when met with 50/50 mine scenario, will just reset and try again on new board
-- Should be updated to choose and random blank square and click it
+- Should be updated to choose a random blank square and click it
